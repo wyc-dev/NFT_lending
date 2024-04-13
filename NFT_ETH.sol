@@ -41,6 +41,9 @@ contract NFTLending is Ownable, ReentrancyGuard {
     event LoanRepaid(uint256 indexed loanId, address indexed borrower, uint256 amountPaid);
     event LoanLiquidated(uint256 indexed loanId, address indexed owner);
     event InterestRateChanged(uint256 newRate);
+    event NFTApprovedByUser(address indexed user, address indexed nftAddress, uint256 indexed nftId);
+
+
 
     /**
      * @dev Sets the original owner of the contract to the deployer.
@@ -100,11 +103,15 @@ contract NFTLending is Ownable, ReentrancyGuard {
 
 
     /**
-     * @dev Approves a specific NFT to be managed by the contract.
-     * This is necessary for the contract to facilitate borrowing and lending of the NFT.
-     */
+    * @dev Approves a specific NFT to be managed by the contract.
+    * This is necessary for the contract to facilitate borrowing and lending of the NFT.
+    * Emits an NFTApprovedByUser event after successful approval.
+    * @param nftAddress The address of the NFT contract.
+    * @param nftId The identifier of the NFT to be managed.
+    */
     function approveNFTTransaction(address nftAddress, uint256 nftId) external {
         IERC721(nftAddress).approve(address(this), nftId);
+        emit NFTApprovedByUser(msg.sender, nftAddress, nftId);
     }
 
 
@@ -140,7 +147,6 @@ contract NFTLending is Ownable, ReentrancyGuard {
         // Increment the loan ID for the next loan
         nextLoanId++;
     }
-
 
 
 
