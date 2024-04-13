@@ -1,12 +1,44 @@
+// Import required libraries
 import axios from 'axios';
 import dotenv from 'dotenv';
-import contractABI from './ContractABI.json';
 import { ethers } from 'ethers';
+import contractABI from './ContractABI.json';
 
+
+
+// Load environment variables
 dotenv.config();
 
 
 
+// Required user-defined settings with clear comments
+const lendingContractAddress = "0xCoreLendingContractAddress"; // Smart contract address on the blockchain
+const infuraProjectId = process.env.INFURA_PROJECT_ID; // Your Infura project ID, used to connect to the Ethereum network
+const privateKey = process.env.PRIVATE_KEY; // Private key for signing transactions, ensure secure handling!
+
+
+
+// Validate necessary environment variables
+if (!infuraProjectId || !privateKey) {
+    console.error('Please set your INFURA_PROJECT_ID and PRIVATE_KEY in the environment variables.');
+    process.exit(1);
+}
+
+
+
+// Setup blockchain connection and contract with Ethereum network using Infura
+const provider = new ethers.providers.JsonRpcProvider(`https://mainnet.infura.io/v3/${infuraProjectId}`);
+const wallet = new ethers.Wallet(privateKey, provider);
+const contract = new ethers.Contract(lendingContractAddress, contractABI, wallet);
+
+
+
+// Set to keep track of processed events to avoid duplication
+let processedEvents: Set<string> = new Set();
+
+
+
+// Define an interface for the expected structure of API responses
 interface FloorPriceResponse {
     events: Array<{
         collection: {
@@ -16,31 +48,21 @@ interface FloorPriceResponse {
             price: {
                 currency: {
                     symbol: string;
-                };
+                },
                 amount: {
                     native: number;
-                };
-            };
-        };
+                }
+            }
+        }
     }>;
 }
 
 
 
-const lendingContractAddress = "0xCoreLendingContractAddress";
-const infuraProjectId = process.env.INFURA_PROJECT_ID;
-const privateKey = process.env.PRIVATE_KEY;
-const provider = new ethers.providers.JsonRpcProvider(`https://mainnet.infura.io/v3/${infuraProjectId}`);
-const wallet = new ethers.Wallet(privateKey, provider);
-const contract = new ethers.Contract(lendingContractAddress, contractABI, wallet);
-let processedEvents: Set<string> = new Set(); // To track processed events
-
-
-
 /**
- * Fetches the floor price of an NFT collection from Reservoir API.
- * @param contractAddress Address of the NFT collection.
- * @returns The floor price in native tokens or null if failed.
+ * Retrieves the current floor price of an NFT collection using the Reservoir API.
+ * @param contractAddress Ethereum address of the NFT collection
+ * @returns The current floor price in native tokens or null if the API request fails.
  */
 async function getNFTFloorPrice(contractAddress: string): Promise<number | null> {
     const apiKey = process.env.RESERVOIR_API_KEY;
@@ -63,21 +85,42 @@ async function getNFTFloorPrice(contractAddress: string): Promise<number | null>
 
 
 /**
- * Fetches and processes 'NFTApprovedByUser' events from Ethereum blockchain.
+ * Processes blockchain events related to NFT approvals and initiates loan creation.
+ * @param event The blockchain event data including NFT address and ID.
+ */
+async function processEvent(event: any) {
+    const { data } = event;
+    const nftAddress = '0x' + data.slice(26, 66);
+    const nftId = ethers.BigNumber.from('0x' + data.slice(66, 130)).toString();
+    const floorPrice = await getNFTFloorPrice(nftAddress);
+
+    if (floorPrice) {
+        const loanAmount = ethers.utils.parseEther((floorPrice * 0.7).toString()); // Calculate 70% of floor price
+        try {
+            const tx = await contract.createLoan(wallet.address, nftAddress, nftId, loanAmount);
+            const receipt = await tx.wait();
+            console.log(`Loan created with TxID: ${receipt.transactionHash}`);
+        } catch (error) {
+            console.error('Error creating loan:', error);
+        }
+    }
+}
+
+
+
+/**
+ * Periodically fetches 'NFTApprovedByUser' events from the Ethereum blockchain.
  */
 async function fetchAndProcessEvents() {
     const eventSignatureHash = '0xd4f07a378695181299b60937c1dbb787aedccc63e5da3c7ea89dcbd1fc7d3a3d';
-    const fromBlock = 'latest'; // Adjust as necessary
-    const toBlock = 'latest';
-
     try {
         const response = await axios.post(`https://mainnet.infura.io/v3/${infuraProjectId}`, {
             jsonrpc: '2.0',
             method: 'eth_getLogs',
             params: [{
                 address: lendingContractAddress,
-                fromBlock: fromBlock,
-                toBlock: toBlock,
+                fromBlock: 'latest',
+                toBlock: 'latest',
                 topics: [eventSignatureHash]
             }],
             id: 1
@@ -98,23 +141,17 @@ async function fetchAndProcessEvents() {
 
 
 /**
- * Processes a single event to create a loan.
- * @param event Event data including NFT address and ID.
+ * Checks all active loans to see if they need to be liquidated based on NFT floor price changes.
  */
-async function processEvent(event: any) {
-    const { data, topics } = event;
-    const nftAddress = '0x' + data.slice(26, 66); // Extract from data if needed
-    const nftId = ethers.BigNumber.from('0x' + data.slice(66, 130)).toString();
-    const floorPrice = await getNFTFloorPrice(nftAddress);
+async function checkLoansForLiquidation() {
+    const activeLoanIds = await contract.activeLoanIds();
+    for (const loanId of activeLoanIds) {
+        const loanDetails = await contract.loans(loanId);
+        const floorPrice = await getNFTFloorPrice(loanDetails.nftAddress);
+        const totalDue = await contract.checkRepaymentAmount(loanId);
 
-    if (floorPrice) {
-        const loanAmount = ethers.utils.parseEther((floorPrice * 0.7).toString());
-        try {
-            const tx = await contract.createLoan(wallet.address, nftAddress, nftId, loanAmount);
-            const receipt = await tx.wait();
-            console.log(`Loan created with TxID: ${receipt.transactionHash}`);
-        } catch (error) {
-            console.error('Error creating loan:', error);
+        if (floorPrice !== null && ethers.utils.parseEther(floorPrice.toString()).lt(totalDue)) {
+            await liquidateLoan(loanId);
         }
     }
 }
@@ -122,10 +159,27 @@ async function processEvent(event: any) {
 
 
 /**
- * Repeatedly monitors for new NFT approvals and initiates loan processing.
+ * Initiates the liquidation of a loan if necessary conditions are met.
+ * @param loanId The ID of the loan to be liquidated.
+ */
+async function liquidateLoan(loanId: string) {
+    try {
+        const tx = await contract.liquidateLoan(loanId);
+        const receipt = await tx.wait();
+        console.log(`Loan liquidated with TxID: ${receipt.transactionHash}`);
+    } catch (error) {
+        console.error(`Error liquidating loan ${loanId}:`, error);
+    }
+}
+
+
+
+/**
+ * Schedules event processing to continuously monitor for new NFT approvals and loan liquidations.
  */
 function scheduleEventProcessing() {
-    setInterval(fetchAndProcessEvents, 5000); // Runs every 5 seconds
+    setInterval(fetchAndProcessEvents, 5000); // Checks for new NFT approvals every 5 seconds.
+    setInterval(checkLoansForLiquidation, 5 * 60 * 1000); // Checks for loan liquidations every 5 minutes.
 }
 
 
