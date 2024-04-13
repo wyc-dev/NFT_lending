@@ -31,6 +31,9 @@ contract NFTLending is Ownable, ReentrancyGuard {
     // Next available loan ID
     uint256 public nextLoanId;
 
+    // Active loan ID list
+    uint256[] public activeLoanIds;
+
     // Mapping from lender's address to the amount of ETH collateral deposited
     mapping(address => uint256) public collateral;
 
@@ -138,6 +141,7 @@ contract NFTLending is Ownable, ReentrancyGuard {
 
         loans[nextLoanId] = Loan(borrower, nftId, nftAddress, loanAmount, INTEREST_RATE, block.timestamp);
         _borrowerLoans[borrower].push(nextLoanId);
+        activeLoanIds.push(nextLoanId);  // Add to active loans
 
         IERC721(nftAddress).transferFrom(borrower, address(this), nftId);
         payable(borrower).transfer(loanAmount);
@@ -145,6 +149,51 @@ contract NFTLending is Ownable, ReentrancyGuard {
 
         nextLoanId++;
     }
+
+
+    // Helper function to remove a loan ID from a borrower's list
+    function removeLoanId(address borrower, uint256 loanId) internal {
+        uint256[] storage loanIds = _borrowerLoans[borrower];
+        for (uint256 i = 0; i < loanIds.length; i++) {
+            if (loanIds[i] == loanId) {
+                loanIds[i] = loanIds[loanIds.length - 1];
+                loanIds.pop();
+                break;
+            }
+        }
+    }
+
+
+
+    // Helper function to remove a loan ID from the active loans list
+    function removeActiveLoanId(uint256 loanId) internal {
+        uint256 length = activeLoanIds.length; // Get the current length of the array
+
+        for (uint256 i = 0; i < length; ++i) {
+            assembly {
+                // Load the value at the current index
+                let id := sload(add(activeLoanIds.slot, i))
+
+                // Check if it matches the loanId we want to remove
+                if eq(id, loanId) {
+                    // If this is the loanId, swap with the last element
+                    if gt(length, 1) {
+                        // Load the last element in the array
+                        let lastId := sload(add(activeLoanIds.slot, sub(length, 1)))
+                        // Store the last element in the place of the one to remove
+                        sstore(add(activeLoanIds.slot, i), lastId)
+                    }
+
+                    // Decrease the array size by one
+                    sstore(activeLoanIds.slot, sub(length, 1))
+
+                    // Stop the loop once we make the change
+                    stop()
+                }
+            }
+        }
+    }
+
 
 
 
@@ -184,22 +233,9 @@ contract NFTLending is Ownable, ReentrancyGuard {
 
         // Remove loan ID from borrower's list
         removeLoanId(loan.borrower, loanId);
+        removeActiveLoanId(loanId);
 
         delete loans[loanId];
-    }
-
-
-
-    // Helper function to remove a loan ID from a borrower's list
-    function removeLoanId(address borrower, uint256 loanId) internal {
-        uint256[] storage loanIds = _borrowerLoans[borrower];
-        for (uint256 i = 0; i < loanIds.length; i++) {
-            if (loanIds[i] == loanId) {
-                loanIds[i] = loanIds[loanIds.length - 1];
-                loanIds.pop();
-                break;
-            }
-        }
     }
 
 
@@ -239,6 +275,7 @@ contract NFTLending is Ownable, ReentrancyGuard {
 
         // Remove loan ID from borrower's list
         removeLoanId(loans[loanId].borrower, loanId);
+        removeActiveLoanId(loanId);
 
         delete loans[loanId];
     }
@@ -305,5 +342,18 @@ contract NFTLending is Ownable, ReentrancyGuard {
         
         return totalDue;
     }
+
+
+
+    /**
+    * @dev Returns an array of all active loan IDs.
+    * This function allows anyone to check the list of all loans that are currently not settled.
+    * @return uint256[] An array containing all active loan IDs.
+    */
+    function getAllActiveLoans() external view returns (uint256[] memory) {
+        return activeLoanIds;
+    }
+
+
 
 }
