@@ -34,6 +34,9 @@ contract NFTLending is Ownable, ReentrancyGuard {
     // Mapping from lender's address to the amount of ETH collateral deposited
     mapping(address => uint256) public collateral;
 
+    // Mapping from borrower's address to their list of loan IDs.
+    mapping(address => uint256[]) private _borrowerLoans;
+
     // Events
     event CollateralDeposited(address indexed depositor, uint256 amount);
     event CollateralWithdrawn(address indexed owner, uint256 amount);
@@ -119,6 +122,7 @@ contract NFTLending is Ownable, ReentrancyGuard {
     /**
     * @dev Creates a loan agreement for an NFT using market price to determine loan amount.
     * Only the owner can execute this, and it uses non-reentrant protection.
+    * Adds the new loan ID to the borrower's list of loans.
     * Emits a LoanCreated event upon success.
     * @param borrower The address of the borrower receiving the NFT.
     * @param nftAddress The address of the NFT contract.
@@ -132,19 +136,13 @@ contract NFTLending is Ownable, ReentrancyGuard {
         require(IERC721(nftAddress).ownerOf(nftId) == borrower, "Borrower must own the NFT");
         require(IERC721(nftAddress).isApprovedForAll(borrower, address(this)), "Contract must be approved to transfer NFT");
 
-        // Create the loan record
         loans[nextLoanId] = Loan(borrower, nftId, nftAddress, loanAmount, INTEREST_RATE, block.timestamp);
+        _borrowerLoans[borrower].push(nextLoanId);
 
-        // Transfer the NFT from the borrower to the contract as collateral
         IERC721(nftAddress).transferFrom(borrower, address(this), nftId);
-
-        // Transfer the loan amount from the contract to the borrower
         payable(borrower).transfer(loanAmount);
-
-        // Emit the event for creating a new loan
         emit LoanCreated(nextLoanId, borrower, loanAmount, INTEREST_RATE);
 
-        // Increment the loan ID for the next loan
         nextLoanId++;
     }
 
@@ -152,88 +150,96 @@ contract NFTLending is Ownable, ReentrancyGuard {
 
     /**
     * @dev Allows a borrower to repay their loan and retrieve their NFT.
-    * Calculates interest based on the time elapsed since the loan was created.
-    * Includes non-reentrant protection. Uses inline assembly to optimize gas usage during calculations.
+    * Calculates interest based on the time elapsed since the loan was created using inline assembly.
     * Emits a LoanRepaid event upon success.
+    * @param loanId The identifier of the loan being repaid.
     */
     function repayLoan(uint256 loanId) external payable nonReentrant {
         Loan storage loan = loans[loanId];
         require(loan.borrower != address(0), "Invalid loan ID");
+        require(_borrowerLoans[loan.borrower].length > 0, "No loans exist for this borrower");
 
         uint256 daysElapsed;
         uint256 interest;
         uint256 totalDue;
         uint256 excess;
 
-        // Inline assembly for optimized calculations
         assembly {
-            // Calculate days elapsed = (block.timestamp - loan.loanStart) / 86400
             daysElapsed := div(sub(timestamp(), sload(add(loan.slot, 5))), 86400)
-
-            // Calculate interest = loan.loanAmount * loan.interestRate * daysElapsed / 100000
             let loanAmount := sload(add(loan.slot, 3))
             let interestRate := sload(add(loan.slot, 4))
             interest := div(mul(mul(loanAmount, interestRate), daysElapsed), 100000)
-
-            // Calculate totalDue = loan.loanAmount + interest
             totalDue := add(loanAmount, interest)
-
-            // Calculate the excess amount to be refunded if any
-            excess := sub(calldataload(4), totalDue) // calldataload(4) loads the msg.value which is at 4th slot in calldata
+            excess := sub(calldataload(4), totalDue)
         }
 
         require(msg.value >= totalDue, "Insufficient amount to repay the loan");
 
-        // Refund any excess payment
         if (excess > 0) {
             payable(_msgSender()).transfer(excess);
         }
 
-        // Transfer NFT back to the borrower
         IERC721(loan.nftAddress).transferFrom(address(this), loan.borrower, loan.nftId);
         emit LoanRepaid(loanId, loan.borrower, msg.value - excess);
 
-        // Delete the loan record
+        // Remove loan ID from borrower's list
+        removeLoanId(loan.borrower, loanId);
+
         delete loans[loanId];
     }
 
 
 
+    // Helper function to remove a loan ID from a borrower's list
+    function removeLoanId(address borrower, uint256 loanId) internal {
+        uint256[] storage loanIds = _borrowerLoans[borrower];
+        for (uint256 i = 0; i < loanIds.length; i++) {
+            if (loanIds[i] == loanId) {
+                loanIds[i] = loanIds[loanIds.length - 1];
+                loanIds.pop();
+                break;
+            }
+        }
+    }
+
+
 
     /**
-     * @dev Liquidates a loan if the market price of the NFT falls below the loan value,
-     * or if the total amount due (including interest) exceeds the market value of the NFT.
-     * Only the owner can execute this, and it includes non-reentrant protection.
-     * Emits a LoanLiquidated event upon success.
-     */
+    * @dev Liquidates a loan if the market price of the NFT falls below the loan value,
+    * or if the total amount due (including interest) exceeds the market value of the NFT.
+    * Only the owner can execute this, and it includes non-reentrant protection.
+    * Emits a LoanLiquidated event upon success.
+    * @param loanId The identifier of the loan to be liquidated.
+    * @param currentMarketPrice The current market price of the NFT.
+    */
     function liquidateLoan(uint256 loanId, uint256 currentMarketPrice) external onlyOwner nonReentrant {
-        // Local variables to hold loan data
-        address nftAddress;
-        uint256 nftId;
         uint256 loanStart;
         uint256 loanAmount;
         uint256 interestRate;
+        uint256 nftId;
+        address nftAddress;
 
-        // Assembly block to efficiently load loan data from storage
         assembly {
-            let loanPtr := add(loans.slot, mul(loanId, 0x20)) // Calculate pointer to the loan in storage
-            loanStart := sload(add(loanPtr, 5)) // Load loanStart
-            loanAmount := sload(add(loanPtr, 3)) // Load loanAmount
-            interestRate := sload(add(loanPtr, 4)) // Load interestRate
-            nftAddress := sload(add(loanPtr, 2)) // Load nftAddress
-            nftId := sload(add(loanPtr, 1)) // Load nftId
+            let loanPtr := add(loans.slot, mul(loanId, 0x20))
+            loanStart := sload(add(loanPtr, 5))
+            loanAmount := sload(add(loanPtr, 3))
+            interestRate := sload(add(loanPtr, 4))
+            nftAddress := sload(add(loanPtr, 2))
+            nftId := sload(add(loanPtr, 1))
         }
 
         uint256 daysElapsed = (block.timestamp - loanStart) / 86400;
         uint256 interest = loanAmount * interestRate * daysElapsed / 100000;
         uint256 totalDue = loanAmount + interest;
 
-        // Using loaded data to perform operations
         require(currentMarketPrice < loanAmount || totalDue > currentMarketPrice, "Loan cannot be liquidated");
+
         IERC721(nftAddress).transferFrom(address(this), owner(), nftId);
         emit LoanLiquidated(loanId, owner());
 
-        // Delete the loan
+        // Remove loan ID from borrower's list
+        removeLoanId(loans[loanId].borrower, loanId);
+
         delete loans[loanId];
     }
 
@@ -248,11 +254,20 @@ contract NFTLending is Ownable, ReentrancyGuard {
     function isMarketPriceBelowTotalDue(uint256 loanId, uint256 currentMarketPrice) external view returns (bool) {
         require(loanId < nextLoanId, "Loan does not exist");
         Loan storage loan = loans[loanId];
-
         uint256 daysElapsed = (block.timestamp - loan.loanStart) / 86400;
         uint256 interest = (loan.loanAmount * loan.interestRate * daysElapsed) / 100000;
         uint256 totalDue = loan.loanAmount + interest;
-
         return currentMarketPrice < totalDue;
+    }
+
+
+
+    /**
+    * @dev Returns an array of loan IDs associated with the caller, facilitating tracking and management of their loans.
+    * This function enhances transparency and borrower accessibility to their loan records.
+    * @return uint256[] An array of loan IDs linked to the caller's address.
+    */
+    function getMyLoans() external view returns (uint256[] memory) {
+        return _borrowerLoans[_msgSender()];
     }
 }
