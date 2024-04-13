@@ -270,4 +270,40 @@ contract NFTLending is Ownable, ReentrancyGuard {
     function getMyLoans() external view returns (uint256[] memory) {
         return _borrowerLoans[_msgSender()];
     }
+
+
+
+    /**
+    * @dev Calculates the total amount due for a specific loan to allow the borrower to retrieve their NFT.
+    * This includes the principal and the interest accrued over time.
+    * Uses inline assembly for gas-efficient calculations.
+    * @param loanId The identifier of the loan.
+    * @return totalDue The total amount of ETH required to repay the loan.
+    */
+    function checkRepaymentAmount(uint256 loanId) external view returns (uint256 totalDue) {
+        require(loanId < nextLoanId, "Loan does not exist");
+        Loan storage loan = loans[loanId];
+
+        uint256 daysElapsed;
+        uint256 interest;
+
+        assembly {
+            // Load loan data from storage
+            let loanStart := sload(add(loan.slot, 5))  // loan.loanStart
+            let loanAmount := sload(add(loan.slot, 3)) // loan.loanAmount
+            let interestRate := sload(add(loan.slot, 4)) // loan.interestRate
+
+            // Calculate days elapsed = (block.timestamp - loanStart) / 86400
+            daysElapsed := div(sub(timestamp(), loanStart), 86400)
+
+            // Calculate interest = (loanAmount * interestRate * daysElapsed) / 100000
+            interest := div(mul(mul(loanAmount, interestRate), daysElapsed), 100000)
+
+            // Calculate totalDue = loanAmount + interest
+            totalDue := add(loanAmount, interest)
+        }
+        
+        return totalDue;
+    }
+
 }
