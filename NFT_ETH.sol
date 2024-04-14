@@ -36,7 +36,8 @@ contract NFTLending is Ownable, ReentrancyGuard {
     // Active loan ID list
     uint256[] public activeLoanIds;
 
-    // Mapping from lender's address to the amount of ETH collateral deposited
+    // Mapping from the user's address to the amount of ETH collateral deposited
+    // Only the owner can deposit ETH as collateral in this contract.
     mapping(address => uint256) public collateral;
 
     // Mapping from borrower's address to their list of loan IDs.
@@ -377,4 +378,7 @@ contract NFTLending is Ownable, ReentrancyGuard {
     receive() external payable {
         emit DonationReceived(msg.sender, msg.value);
     }
+
+
+
 }
