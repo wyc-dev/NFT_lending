@@ -43,6 +43,8 @@ contract NFTLending is Ownable, ReentrancyGuard {
     // Mapping from borrower's address to their list of loan IDs.
     mapping(address => uint256[]) private _borrowerLoans;
 
+
+
     // Events
     event CollateralDeposited(address indexed depositor, uint256 amount);
     event CollateralWithdrawn(address indexed owner, uint256 amount);
@@ -114,9 +116,12 @@ contract NFTLending is Ownable, ReentrancyGuard {
 
 
     /**
-    * @dev Approves a specific NFT to be managed by the contract.
-    * This is necessary for the contract to facilitate borrowing and lending of the NFT.
-    * Emits an NFTApprovedByUser event after successful approval.
+    * @dev Approves an NFT to be managed by the contract.
+    * This function is necessary to enable the contract to facilitate the borrowing and lending of the NFT.
+    * It emits an NFTApprovedByUser event which the backend can detect.
+    * Upon detecting this event, the backend, utilizing the service provider's deployer private key,
+    * may automatically initiate the createLoan function if other loan conditions are met.
+    * This function sets up the necessary approval for the contract to transfer the NFT from the borrower.
     * @param nftAddress The address of the NFT contract.
     * @param nftId The identifier of the NFT to be managed.
     */
@@ -128,10 +133,14 @@ contract NFTLending is Ownable, ReentrancyGuard {
 
 
     /**
-    * @dev Creates a loan agreement for an NFT using market price to determine loan amount.
-    * Only the owner can execute this, and it uses non-reentrant protection.
-    * Adds the new loan ID to the borrower's list of loans.
-    * Emits a LoanCreated event upon success.
+    * @dev Creates a loan agreement for an NFT using its market price to determine the loan amount.
+    * This function can only be executed by the contract owner and includes non-reentrant protection
+    * to prevent re-entry attacks during its execution.
+    * It automatically adds the new loan ID to the borrower's list of loans and to the active loans list.
+    * This function is typically triggered automatically by a backend service after detecting an
+    * NFTApprovedByUser event, using the deployer's private key to perform secure and authorized operations.
+    * The function transfers the NFT from the borrower to the contract as collateral and sends the loan amount
+    * in ETH to the borrower, logging this transaction with a LoanCreated event.
     * @param borrower The address of the borrower receiving the NFT.
     * @param nftAddress The address of the NFT contract.
     * @param nftId The identifier of the NFT.
