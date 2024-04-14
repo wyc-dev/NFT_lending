@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.8;
 
+
+
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -43,6 +45,7 @@ contract NFTLending is Ownable, ReentrancyGuard {
     // Events
     event CollateralDeposited(address indexed depositor, uint256 amount);
     event CollateralWithdrawn(address indexed owner, uint256 amount);
+    event DonationReceived(address indexed donor, uint256 amount);
     event LoanCreated(uint256 indexed loanId, address indexed borrower, uint256 amount, uint256 interestRate);
     event LoanRepaid(uint256 indexed loanId, address indexed borrower, uint256 amountPaid);
     event LoanLiquidated(uint256 indexed loanId, address indexed owner);
@@ -61,13 +64,14 @@ contract NFTLending is Ownable, ReentrancyGuard {
 
 
     /**
-     * @dev Allows users to deposit ETH as collateral for borrowing NFTs.
+     * @dev Allows only the owner to deposit ETH as collateral for borrowing NFTs.
      * Emits a CollateralDeposited event upon success.
+     * Restricts deposit function to only the owner for specific use cases related to managing collateral for NFTs.
      */
-    function depositCollateral() external payable {
+    function depositCollateral() external payable onlyOwner {
         require(msg.value > 0, "Deposit must be greater than 0");
-        collateral[_msgSender()] += msg.value;
-        emit CollateralDeposited(_msgSender(), msg.value);
+        collateral[msg.sender] += msg.value;
+        emit CollateralDeposited(msg.sender, msg.value);
     }
 
 
@@ -356,4 +360,21 @@ contract NFTLending is Ownable, ReentrancyGuard {
 
 
 
+    /**
+     * @dev Fallback function to accept ETH donations or unexpected transfers to the contract.
+     * Funds received through this function can be used to support the project.
+     */
+    fallback() external payable {
+        emit DonationReceived(msg.sender, msg.value);
+    }
+
+
+
+    /**
+     * @dev Receive function to accept ETH donations directly when someone sends ETH to the contract address.
+     * This ensures the contract can log and respond to plain transfers.
+     */
+    receive() external payable {
+        emit DonationReceived(msg.sender, msg.value);
+    }
 }
