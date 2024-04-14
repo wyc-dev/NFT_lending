@@ -71,8 +71,8 @@ contract NFTLending is Ownable, ReentrancyGuard {
      */
     function depositCollateral() external payable onlyOwner {
         require(msg.value > 0, "Deposit must be greater than 0");
-        collateral[msg.sender] += msg.value;
-        emit CollateralDeposited(msg.sender, msg.value);
+        collateral[_msgSender()] += msg.value;
+        emit CollateralDeposited(_msgSender(), msg.value);
     }
 
 
@@ -122,7 +122,7 @@ contract NFTLending is Ownable, ReentrancyGuard {
     */
     function approveNFTTransaction(address nftAddress, uint256 nftId) external {
         IERC721(nftAddress).approve(address(this), nftId);
-        emit NFTApprovedByUser(msg.sender, nftAddress, nftId);
+        emit NFTApprovedByUser(_msgSender(), nftAddress, nftId);
     }
 
 
@@ -366,7 +366,7 @@ contract NFTLending is Ownable, ReentrancyGuard {
      * Funds received through this function can be used to support the project.
      */
     fallback() external payable {
-        emit DonationReceived(msg.sender, msg.value);
+        emit DonationReceived(_msgSender(), msg.value);
     }
 
 
@@ -376,7 +376,7 @@ contract NFTLending is Ownable, ReentrancyGuard {
      * This ensures the contract can log and respond to plain transfers.
      */
     receive() external payable {
-        emit DonationReceived(msg.sender, msg.value);
+        emit DonationReceived(_msgSender(), msg.value);
     }
 
 
