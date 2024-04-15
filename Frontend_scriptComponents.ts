@@ -1,6 +1,35 @@
 import { ethers } from 'ethers';
+import { MetaMaskSDK } from "@metamask/sdk";
 
-declare const window: any;
+// Declare global to access 'window' in a Node.js-like TypeScript environment if necessary
+declare global {
+    interface Window {
+        ethereum: any;
+        location: {
+            href: string;
+        };
+    }
+}
+
+// Initialize MetaMaskSDK with configuration options
+const MMSDK = new MetaMaskSDK({
+    dappMetadata: {
+        name: "NFT Lending Dapp",
+        url: window.location.href,
+    },
+    infuraAPIKey: process.env.INFURA_API_KEY as string,  // Ensure the environment variable is defined
+    // Include additional options as needed
+});
+
+// Retrieve the Ethereum provider from MetaMaskSDK
+const ethereum = MMSDK.getProvider();
+
+// // Request account access using the Ethereum provider
+// ethereum.request({ method: "eth_requestAccounts", params: [] }).then((accounts: string[]) => {
+//     console.log('Connected accounts:', accounts);
+// }).catch((error: Error) => {
+//     console.error('Failed to connect MetaMask:', error);
+// });
 
 
 
@@ -29,7 +58,7 @@ const contractAddress = "0xYourContractAddressHere";
  * This function prompts the user to connect their MetaMask wallet to the dapp.
  * It logs the connected address and initializes token balance retrieval functions.
  */
-async function connectWallet() {
+async function connectWallet() { // or we can use ether.js
     if (!window.ethereum) {
         throw new Error('MetaMask is not installed!');
     }
